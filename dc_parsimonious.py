@@ -1,11 +1,13 @@
 import json
 from parsimonious.grammar import Grammar
 from parsimonious.nodes import NodeVisitor
+import duckdb
+import pandas as pd
+import argparse
 
 def dc_to_sql(dc_json_string: str, table_name: str) -> str:
 
     dc_grammar = r"""
-        ws = ~r"\s*"
 
         dc_object = "{" ws "\"type\"" ws ":" ws "\"DenialConstraint\"" ws "," ws "\"predicates\"" ws ":" ws predicate_array ws "}"
         
@@ -27,6 +29,7 @@ def dc_to_sql(dc_json_string: str, table_name: str) -> str:
         
         signed_int = ~r"-?\d+"
         
+        ws = ~r"\s*"
     """
 
     class DcToSqlVisitor(NodeVisitor):
@@ -106,7 +109,7 @@ def dc_to_sql(dc_json_string: str, table_name: str) -> str:
             return visited_children[1]
 
     try:
-        grammar = Grammar(json_dc_grammar)
+        grammar = Grammar(dc_grammar)
         parse_tree = grammar.parse(dc_json_string)
         visitor = DcToSqlVisitor(table_name)
         sql_query = visitor.visit(parse_tree)
@@ -119,28 +122,49 @@ def dc_to_sql(dc_json_string: str, table_name: str) -> str:
 #############################################
 
 if __name__ == '__main__':
-    filename = "results.txt"
+    parser = argparse.ArgumentParser(description="Run Denial Constraints on a CSV using DuckDB")
+    parser.add_argument(
+        "--csv-file",
+        type=str,
+        default="flights.csv",
+        help="Path to the CSV file "
+    )
+    parser.add_argument(
+        "--results-file",
+        type=str,
+        default="results.txt",
+        help="Path to the DCs JSON file"
+    )
+
+    args = parser.parse_args()
+    csv_file = args.csv_file
+    results_file = args.results_file
+
+
     json_objects = []
+    with open(results_file, 'r', encoding='utf-8') as f:
+        json_objects = [line.strip() for line in f if line.strip()]
 
     # pega o nome da tabela do primeiro DC
     dc0 = json.loads(json_objects[0])
-    table_identifier = dc0['predicates'][0]['column1']['tableIdentifier']
-    table_json = table_identifier.split('.')[0]
+    table_name = dc0['predicates'][0]['column1']['tableIdentifier'].split('.')[0]
+
+    df = pd.read_csv(csv_file)
+    con = duckdb.connect()
+    con.register(table_name, df)
 
     # itera sobre a lista de JSONs lida do arquivo
     for i, dc_json in enumerate(json_objects):
-        try:
-            print(f"DC #{i+1} para a tabela '{table_json}'")
-             
-            sql_dc = dc_to_sql(dc_json, table_json)
+        print(f"\nDC #{i+1} para a tabela '{table_name}'")
+        print("Denial Constraint de Entrada (JSON):")
+        print(dc_json)
 
-            print("Denial Constraint de Entrada (JSON):")
-            print(dc_json)
+        sql_query = dc_to_sql(dc_json, table_name)
+        print("\nConsulta SQL Gerada:")
+        print(sql_query)
 
-            print("\nConsulta SQL Gerada:")
-            print(sql_dc)
-
-            print("-----------------------------------")
-
-        except ValueError as e:
-            print(e)
+        # Execute on DuckDB
+        violations = con.execute(sql_query).df()
+        print("\nResultados:")
+        print(violations if not violations.empty else "Nenhuma violação encontrada.")
+        print("-----------------------------------")
