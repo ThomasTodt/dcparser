@@ -1,0 +1,126 @@
+{
+    "total_bytes_written": 0,
+    "total_bytes_read": 0,
+    "rows_returned": 50000000,
+    "latency": 37.28412884,
+    "result_set_size": 1200000000,
+    "query_name": "SELECT a, SUM(b) FROM large_table GROUP BY a;",
+    "blocked_thread_time": 0.0,
+    "system_peak_buffer_memory": 3302387712,
+    "system_peak_temp_dir_size": 0,
+    "cpu_time": 7.042735159000001,
+    "extra_info": {},
+    "cumulative_cardinality": 250000000,
+    "cumulative_rows_scanned": 1400000000,
+    "children": [
+        {
+            "total_bytes_written": 0,
+            "total_bytes_read": 0,
+            "result_set_size": 1200000000,
+            "operator_name": "PROJECTION",
+            "cpu_time": 7.042735159000001,
+            "extra_info": {
+                "Projections": [
+                    "__internal_decompress_integral_bigint(#0, 0)",
+                    "#1"
+                ],
+                "Estimated Cardinality": "30811385"
+            },
+            "cumulative_cardinality": 250000000,
+            "operator_type": "PROJECTION",
+            "operator_cardinality": 50000000,
+            "cumulative_rows_scanned": 1400000000,
+            "operator_rows_scanned": 0,
+            "operator_timing": 0.08118837000000002,
+            "children": [
+                {
+                    "total_bytes_written": 0,
+                    "total_bytes_read": 0,
+                    "result_set_size": 1000000000,
+                    "operator_name": "HASH_GROUP_BY",
+                    "cpu_time": 6.961546789000001,
+                    "extra_info": {
+                        "Groups": "#0",
+                        "Aggregates": "sum_no_overflow(#1)",
+                        "Estimated Cardinality": "30811385"
+                    },
+                    "cumulative_cardinality": 200000000,
+                    "operator_type": "HASH_GROUP_BY",
+                    "operator_cardinality": 50000000,
+                    "cumulative_rows_scanned": 1400000000,
+                    "operator_rows_scanned": 0,
+                    "operator_timing": 6.807753570000001,
+                    "children": [
+                        {
+                            "total_bytes_written": 0,
+                            "total_bytes_read": 0,
+                            "result_set_size": 600000000,
+                            "operator_name": "PROJECTION",
+                            "cpu_time": 0.153793219,
+                            "extra_info": {
+                                "Projections": [
+                                    "a",
+                                    "b"
+                                ],
+                                "Estimated Cardinality": "50000000"
+                            },
+                            "cumulative_cardinality": 150000000,
+                            "operator_type": "PROJECTION",
+                            "operator_cardinality": 50000000,
+                            "cumulative_rows_scanned": 1400000000,
+                            "operator_rows_scanned": 0,
+                            "operator_timing": 0.0046440280000000006,
+                            "children": [
+                                {
+                                    "total_bytes_written": 0,
+                                    "total_bytes_read": 0,
+                                    "result_set_size": 600000000,
+                                    "operator_name": "PROJECTION",
+                                    "cpu_time": 0.14914919100000001,
+                                    "extra_info": {
+                                        "Projections": [
+                                            "__internal_compress_integral_uinteger(#0, 0)",
+                                            "#1"
+                                        ],
+                                        "Estimated Cardinality": "50000000"
+                                    },
+                                    "cumulative_cardinality": 100000000,
+                                    "operator_type": "PROJECTION",
+                                    "operator_cardinality": 50000000,
+                                    "cumulative_rows_scanned": 1400000000,
+                                    "operator_rows_scanned": 0,
+                                    "operator_timing": 0.095192579,
+                                    "children": [
+                                        {
+                                            "total_bytes_written": 0,
+                                            "total_bytes_read": 0,
+                                            "result_set_size": 800000000,
+                                            "operator_name": "SEQ_SCAN ",
+                                            "cpu_time": 0.053956612000000015,
+                                            "extra_info": {
+                                                "Table": "large_table",
+                                                "Type": "Sequential Scan",
+                                                "Projections": [
+                                                    "a",
+                                                    "b"
+                                                ],
+                                                "Estimated Cardinality": "50000000"
+                                            },
+                                            "cumulative_cardinality": 50000000,
+                                            "operator_type": "TABLE_SCAN",
+                                            "operator_cardinality": 50000000,
+                                            "cumulative_rows_scanned": 1400000000,
+                                            "operator_rows_scanned": 1400000000,
+                                            "operator_timing": 0.053956612000000015,
+                                            "children": []
+                                        }
+                                    ]
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+    ]
+}

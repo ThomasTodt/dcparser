@@ -1,0 +1,5 @@
+CMDLINE python dc_parsimonious.py --csv-file flights.csv --results-file results.txt
+MEM 0.437500 1759785753.0871
+MEM 58.039062 1759785753.1933
+MEM 97.542969 1759785753.3119
+MEM 110.089844 1759785753.4186
