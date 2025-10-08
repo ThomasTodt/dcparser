@@ -167,23 +167,37 @@ def dc_to_sql(dc_json_string: str, table_name: str) -> str:
     except ValueError as e:
         print(e)
 
-def run_dc_query_for_parallel(args):
-    """Função alvo para o modo de paralelismo ENTRE-queries (multiprocessing)."""
-    dc_json, csv_path, i = args
-    # Cada processo cria sua própria conexão
-    con = duckdb.connect()
-    sql_query = dc_to_sql(dc_json, csv_path)
-    if sql_query:
-        num_violations = con.execute(sql_query).df().shape
-        con.close()
-        return i, num_violations
-    return i, -1
+
+# função para rodar uma query em uma thread
+def run_query_in_thread(main_connection, dc_json, csv_path, i, results_list):
+    """
+    Executa uma única query de DC em um thread, usando seu próprio cursor.
+    """
+    try:
+        # 1. Cria um cursor a partir da conexão principal
+        cursor = main_connection.cursor()
+        
+        # 2. Gera e executa a query usando o cursor
+        sql_query = dc_to_sql(dc_json, csv_path)
+        if sql_query:
+            violations = cursor.execute(sql_query).df()
+            num_violations = len(violations)
+            # 3. Armazena o resultado em uma lista compartilhada
+            results_list.append((i, num_violations))
+            print(f"Thread for DC #{i+1}: Found {num_violations} violations.")
+
+    except Exception as e:
+        results_list.append((i, -1))
+        print(f"Error in thread for DC #{i+1}: {e}")
 
 
 
 
-def run_single_benchmark(thread_count, json_objects, csv_file, result_dict):
-    """Executa a carga de trabalho completa para uma única configuração de threads."""
+def run_single_benchmark(thread_count, json_objects, csv_file):
+    """
+    Executa a carga de trabalho, imprime as contagens de violações
+    e retorna apenas as métricas de benchmark.
+    """
     pid = os.getpid()
     print(f"Iniciando teste com {thread_count} thread(s) (PID: {pid})...")
     
@@ -193,14 +207,16 @@ def run_single_benchmark(thread_count, json_objects, csv_file, result_dict):
     monitor.start()
     start_time = time.perf_counter()
     
-    for dc_json in json_objects:
+    for i, dc_json in enumerate(json_objects):
         sql_query = dc_to_sql(dc_json, csv_file)
         if sql_query:
-            con.execute(sql_query).fetchone()
+            # Executa a query e obtém o número de violações
+            num_violations = len(con.execute(sql_query).df())
+            # Imprime a contagem imediatamente
+            print(f"DC #{i+1}: Found {num_violations} violations.")
             
     end_time = time.perf_counter()
     total_cpu, peak_mem = monitor.stop()
-    
     con.close()
     
     result = {
@@ -209,8 +225,9 @@ def run_single_benchmark(thread_count, json_objects, csv_file, result_dict):
         "peak_mem_mb": peak_mem,
         "total_cpu_pct": total_cpu
     }
-    result_dict[thread_count] = result
     print(f"Teste com {thread_count} thread(s) concluído.")
+    return result
+
 
 # =============================================================================
 # Novo Bloco Principal
@@ -229,59 +246,69 @@ if __name__ == '__main__':
     num_logical_cores = os.cpu_count()
 
     if args.parallel:
-        # --- MODO 1: PARALELISMO ENTRE QUERIES (INTER-QUERY) ---
-        # Usa múltiplos processos para executar múltiplas queries ao mesmo tempo.
-        print("Executando em modo PARALELO (INTER-QUERY)...")
+        print("Executando em modo THREADING (INTER-QUERY com cursores)...")
+
+        pid = os.getpid()
+        monitor = ResourceMonitor(pid)
+
+        # 1. Crie UMA ÚNICA conexão principal
+        main_con = duckdb.connect(config={'memory_limit': '3GB'})
+        # main_con = duckdb.connect(config={'threads': 4})
+
         
-        mem_before = process.memory_info().rss / (1024 * 1024)
+        threads = []
+        results = [] # Lista para coletar os resultados dos threads
+        
+        monitor.start()
         start_time = time.perf_counter()
-        
-        tasks = [(dc_json, args.csv_file, i) for i, dc_json in enumerate(json_objects)]
-        
-        print(f"Iniciando pool com {num_logical_cores} processos para {len(tasks)} tarefas.\n")
-        
-        with Pool(processes=num_logical_cores) as pool:
-            results = pool.map(run_dc_query_for_parallel, tasks)
-            
-        for i, num_violations in sorted(results):
-            if num_violations!= -1:
-                print(f"DC #{i+1}: {num_violations} violações")
-            else:
-                print(f"DC #{i+1}: erro")
+
+        # 2. Crie e inicie um thread para cada query de DC
+        for i, dc_json in enumerate(json_objects):
+            thread = Thread(target=run_query_in_thread, 
+                            args=(main_con, dc_json, args.csv_file, i, results))
+            threads.append(thread)
+            thread.start()
+
+        # 3. Espere todos os threads terminarem
+        for thread in threads:
+            thread.join()
 
         end_time = time.perf_counter()
-        mem_after = process.memory_info().rss / (1024 * 1024)
+        total_cpu, peak_mem = monitor.stop()
 
-        print("\n--- Resultados do Benchmark (Paralelo INTER-QUERY) ---")
-        print(f"Memória (processo principal): Início={mem_before:.2f} MB, Fim={mem_after:.2f} MB")
-        print(f"✅ Tempo total: {end_time - start_time:.4f} segundos")
+        # 4. Feche a conexão principal
+        main_con.close()
+
+        # Processa os resultados
+        print("\n--- Resultados (Threading) ---")
+        for i, num_violations in sorted(results):
+             if num_violations != -1:
+                print(f"DC #{i+1}: {num_violations} violações")
+             else:
+                print(f"DC #{i+1}: erro")
+        
+        print("\n--- Resultados do Benchmark (Threading) ---")
+        print(f"Tempo total: {end_time - start_time:.4f} segundos")
+        print(f"Pico de Memória (MB): {peak_mem:.2f}")
+        print(f"Uso Médio de CPU (%): {total_cpu:.2f}")
+        print("-" * 40)
 
     else:
-        # --- MODO 2: SEQUENCIAL COM PARALELISMO DENTRO DA QUERY (INTRA-QUERY) ---
-        # Executa uma query de cada vez, mas permite que o DuckDB use múltiplos threads para cada uma.
+        # O modo sequencial agora é mais simples
         print("Executando em modo SEQUENCIAL (testando paralelismo INTRA-QUERY)...")
         
-        # Vamos testar uma faixa de configurações de threads para ver o impacto
-        thread_counts_to_test = [8] #, num_logical_cores]
-        benchmark_results = []
+        thread_counts_to_test = [8]
+        final_results = []
 
-        with Manager() as manager:
-            result_dict = manager.dict()
-            processes = []
-            
-            for thread_count in thread_counts_to_test:
-                p = Process(target=run_single_benchmark, args=(thread_count, json_objects, args.csv_file, result_dict))
-                processes.append(p)
-                p.start()
-            
-            for p in processes:
-                p.join() # Espera todos os processos terminarem
+        for thread_count in thread_counts_to_test:
+            # A função agora imprime as contagens internamente
+            result = run_single_benchmark(thread_count, json_objects, args.csv_file)
+            final_results.append(result)
+            print("-" * 75)
 
-            # Converte o dict gerenciado em uma lista e ordena pelos threads
-            final_results = sorted(list(result_dict.values()), key=lambda x: x['threads'])
-
-        print("\n--- Resultados Finais do Benchmark (Corrigido) ---")
-        print(f"{'Threads':<10} | {'Tempo (s)':<15} | {'Pico Memória (MB)':<20} | {'Uso Total CPU (%)':<20}")
-        print("-" * 75)
+        # A impressão final do benchmark funciona para ambos os modos
+        print("\n--- Resultados Finais do Benchmark ---")
+        print(f"{'Configuração Threads':<20} | {'Tempo (s)':<15} | {'Pico Memória (MB)':<20} | {'Uso Total CPU (%)':<20}")
+        print("-" * 85)
         for res in final_results:
-            print(f"{res['threads']:<10} | {res['time_s']:<15.4f} | {res['peak_mem_mb']:<20.2f} | {res['total_cpu_pct']:<20.2f}")
+            print(f"{res['threads']:<20} | {res['time_s']:<15.4f} | {res['peak_mem_mb']:<20.2f} | {res['total_cpu_pct']:<20.2f}")
