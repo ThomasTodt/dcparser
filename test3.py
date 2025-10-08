@@ -180,13 +180,8 @@ def run_query_in_thread(main_connection, dc_json, csv_path, i, results_list):
         # 2. Gera e executa a query usando o cursor
         sql_query = dc_to_sql(dc_json, csv_path)
         if sql_query:
-            
-            count_query = f"SELECT COUNT(*) FROM ({sql_query.replace(';', '')}) as violations_subquery;"
-            num_violations = cursor.execute(count_query).fetchone()[0]
-
-            # violations = cursor.execute(sql_query).df()
-            # num_violations = len(violations)
-            
+            violations = cursor.execute(sql_query).df()
+            num_violations = len(violations)
             # 3. Armazena o resultado em uma lista compartilhada
             results_list.append((i, num_violations))
             print(f"Thread for DC #{i+1}: Found {num_violations} violations.")
@@ -216,12 +211,7 @@ def run_single_benchmark(thread_count, json_objects, csv_file):
         sql_query = dc_to_sql(dc_json, csv_file)
         if sql_query:
             # Executa a query e obtém o número de violações
-
-            count_query = f"SELECT COUNT(*) FROM ({sql_query.replace(';', '')}) as violations_subquery;"
-            num_violations = cursor.execute(count_query).fetchone()[0]
-
-
-            # num_violations = len(con.execute(sql_query).df())
+            num_violations = len(con.execute(sql_query).df())
             # Imprime a contagem imediatamente
             print(f"DC #{i+1}: Found {num_violations} violations.")
             
@@ -262,7 +252,6 @@ if __name__ == '__main__':
         monitor = ResourceMonitor(pid)
 
         # 1. Crie UMA ÚNICA conexão principal
-        # main_con = duckdb.connect(config={'memory_limit': '3GB'})
         main_con = duckdb.connect()
         # main_con = duckdb.connect(config={'threads': 4})
 
@@ -308,7 +297,7 @@ if __name__ == '__main__':
         # O modo sequencial agora é mais simples
         print("Executando em modo SEQUENCIAL (testando paralelismo INTRA-QUERY)...")
         
-        thread_counts_to_test = [8]
+        thread_counts_to_test = [12]
         final_results = []
 
         for thread_count in thread_counts_to_test:
