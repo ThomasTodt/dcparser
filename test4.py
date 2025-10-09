@@ -173,7 +173,7 @@ def dc_to_sql(dc_json_string: str, table_name: str) -> str:
 # funções para execução de queries
 ###########################################################
 
-def run_query_in_thread(main_connection, dc_json, csv_file, thread_n, results_list, print_violations):
+def run_query_in_thread(main_connection, dc_json, csv_file, thread_n, results_list):
     """
     Executa uma única query de DC em uma thread
     """
@@ -181,56 +181,52 @@ def run_query_in_thread(main_connection, dc_json, csv_file, thread_n, results_li
     
     sql_query = dc_to_sql(dc_json, csv_file)
     if sql_query:
-        num_violations = 0
-
-        if print_violations:
-            # for row in cursor.execute(sql_query).fetchall():
-            # for row in cursor.execute(sql_query):
-            cursor.execute(sql_query)
-            while True:
-                linha = cursor.fetchone() # Pega apenas UMA linha
-                if linha is None: # Acabaram as linhas
-                    break
-
-                print(f"  [VIOLATION DC #{thread_n+1}] {linha}")
-                num_violations += 1
         
-        else:
-            count_query = f"SELECT COUNT(*) FROM ({sql_query.replace(';', '')}) as violations_subquery;"
-            num_violations = cursor.execute(count_query).fetchone()[0]
+        count_query = f"SELECT COUNT(*) FROM ({sql_query.replace(';', '')}) as violations_subquery;"
+        num_violations = cursor.execute(count_query).fetchone()[0]
+
+        # violations = cursor.execute(sql_query).df()
+        # num_violations = len(violations)
         
         results_list.append((thread_n, num_violations))
+        print(f"DC #{thread_n+1}: {num_violations} violacoes")
 
-
-def run_sequential(thread_count, dc_json, csv_file, results_list, print_violations):    
+def run_sequential(thread_count, dc_json, csv_file, results_list):
+    # pid = os.getpid()
+    
     con = duckdb.connect(config={'threads': thread_count})
+    # monitor = ResourceMonitor(pid)
+    
+    # monitor.start()
+    # start_time = time.perf_counter()
     
     for i, dc_json in enumerate(dc_json):
         sql_query = dc_to_sql(dc_json, csv_file)
 
         if sql_query:
-            num_violations = 0
+            # Executa a query e obtém o número de violações
 
-            if print_violations:
-                # for row in cursor.execute(sql_query).fetchall():
-                # for row in cursor.execute(sql_query):
-                con.execute(sql_query)
-                while True:
-                    linha = con.fetchone() # Pega apenas UMA linha
-                    if linha is None: # Acabaram as linhas
-                        break
-
-                    print(f"  [VIOLATION DC #{i+1}] {linha}")
-                    num_violations += 1
-
-            else:
-                count_query = f"SELECT COUNT(*) FROM ({sql_query.replace(';', '')}) as violations_subquery;"
-                num_violations = con.execute(count_query).fetchone()[0]
+            count_query = f"SELECT COUNT(*) FROM ({sql_query.replace(';', '')}) as violations_subquery;"
+            num_violations = con.execute(count_query).fetchone()[0]
 
             results_list.append((i, num_violations))
 
+            # num_violations = len(con.execute(sql_query).df())
+            # Imprime a contagem imediatamente
+            print(f"DC #{i+1}: Found {num_violations} violations.")
+            
+    # end_time = time.perf_counter()
+    # total_cpu, peak_mem = monitor.stop()
     con.close()
     
+    # result = {
+    #     "threads": thread_count,
+    #     "time_s": end_time - start_time,
+    #     "peak_mem_mb": peak_mem,
+    #     "total_cpu_pct": total_cpu
+    # }
+
+    # return results
 
 ###################################################
 # Main
@@ -241,7 +237,6 @@ if __name__ == '__main__':
     parser.add_argument("--csv-file", type=str, default="flights.csv", help="Caminho para o CSV com os dados")
     parser.add_argument("--results-file", type=str, default="results.txt", help="Caminho para o JSON com DCs")
     parser.add_argument("--parallel", action="store_true", help="Executa as queries em paralelo")
-    parser.add_argument("--print", action="store_true", help="Imprime todas as linhas que violam as DCs")
     args = parser.parse_args()
 
     # le o json de cada dc
@@ -249,7 +244,7 @@ if __name__ == '__main__':
         json_objects = [line.strip() for line in f if line.strip()]
 
     process = psutil.Process(os.getpid())
-
+    # num_logical_cores = os.cpu_count()
     results = [] # Lista para coletar os resultados dos threads
 
     if args.parallel:
@@ -263,6 +258,7 @@ if __name__ == '__main__':
         # main_con = duckdb.connect(config={'threads': 4})
         
         threads = []
+        # results = [] # Lista para coletar os resultados dos threads
         
         monitor.start()
         start_time = time.perf_counter()
@@ -270,7 +266,7 @@ if __name__ == '__main__':
         # uma thread para cada query de DC
         for i, dc_json in enumerate(json_objects):
             thread = Thread(target=run_query_in_thread, 
-                            args=(main_con, dc_json, args.csv_file, i, results, args.print))
+                            args=(main_con, dc_json, args.csv_file, i, results))
             threads.append(thread)
             thread.start()
 
@@ -283,10 +279,26 @@ if __name__ == '__main__':
         main_con.close()
 
 
+        # # Processa os resultados
+        # print("\n--- Resultados (Threading) ---")
+        # for i, num_violations in sorted(results):
+        #      if num_violations != -1:
+        #         print(f"DC #{i+1}: {num_violations} violações")
+        #      else:
+        #         print(f"DC #{i+1}: erro")
+        
+        # print("\n--- Resultados do Benchmark (Threading) ---")
+        # print(f"Tempo total: {end_time - start_time:.4f} segundos")
+        # print(f"Pico de Memória (MB): {peak_mem:.2f}")
+        # print(f"Uso Médio de CPU (%): {total_cpu:.2f}")
+        # print("-" * 40)
+
+
     else:
         print("Executando em modo sequencial")
         
         thread_count = 4 # os.cpu_count()
+        # results = []
 
         pid = os.getpid()
         monitor = ResourceMonitor(pid)
@@ -294,16 +306,30 @@ if __name__ == '__main__':
         monitor.start()
         start_time = time.perf_counter()
 
-        run_sequential(thread_count, json_objects, args.csv_file, results, args.print)
+        # A função agora imprime as contagens internamente
+        run_sequential(thread_count, json_objects, args.csv_file, results)
+        # results.append(result)
 
         end_time = time.perf_counter()
         total_cpu, peak_mem = monitor.stop()
 
-    print("\n-------------------------")
-    for i, num_violations in sorted(results):
-        print(f"DC #{i+1}: {num_violations} violações")
+        # # A impressão final do benchmark funciona para ambos os modos
+        # print("\n--- Resultados Finais do Benchmark ---")
+        # print(f"{'Configuração Threads':<20} | {'Tempo (s)':<15} | {'Pico Memória (MB)':<20} | {'Uso Total CPU (%)':<20}")
+        # print("-" * 85)
+        # for res in results:
+        #     print(f"{res['threads']:<20} | {res['time_s']:<15.4f} | {res['peak_mem_mb']:<20.2f} | {res['total_cpu_pct']:<20.2f}")
 
-    print("\n-------------------------")
+    # Processa os resultados
+    # print("\n--- Resultados (Threading) ---")
+    # for i, num_violations in sorted(results):
+    #     if num_violations != -1:
+    #         print(f"DC #{i+1}: {num_violations} violações")
+    #     else:
+    #         print(f"DC #{i+1}: erro")
+
+    print("\n--- Resultados do Benchmark (Threading) ---")
     print(f"Tempo total: {end_time - start_time:.4f} segundos")
     print(f"Pico de Memória (MB): {peak_mem:.2f}")
     print(f"Uso Médio de CPU (%): {total_cpu:.2f}")
+    print("-" * 40)
