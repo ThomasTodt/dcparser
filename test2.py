@@ -10,10 +10,10 @@ import psutil
 from threading import Thread, Event
 
 
-# =============================================================================
-# A classe ResourceMonitor do nosso relatório anterior é inserida aqui.
-# Ela é essencial para medições precisas de pico de memória e uso de CPU.
-# =============================================================================
+######################################################
+# obtenção de métricas
+######################################################
+
 class ResourceMonitor:
     """Monitora o uso de CPU e memória de um processo em um thread separado."""
     def __init__(self, process_pid, interval=0.01):
@@ -23,19 +23,21 @@ class ResourceMonitor:
         self._thread = Thread(target=self._monitor, daemon=True)
         self.peak_memory_mb = 0
         self.cpu_percents = []
-        # CORREÇÃO: Chame cpu_percent uma vez para inicializá-lo e descartar o resultado.
-        self._process.cpu_percent(interval=None)
+        self._process.cpu_percent(interval=None) # chama cpu_percent uma vez para inicializá-lo e descartar o resultado.
+
 
     def _monitor(self):
         self.peak_memory_mb = self._process.memory_info().rss / (1024 ** 2)
+
         while not self._stop_event.is_set():
             try:
                 mem_info = self._process.memory_info().rss / (1024 ** 2)
+
                 if mem_info > self.peak_memory_mb:
                     self.peak_memory_mb = mem_info
                 
-                # Agora as leituras serão corretas
                 self.cpu_percents.append(self._process.cpu_percent(interval=self._interval))
+
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 break
 
@@ -48,10 +50,10 @@ class ResourceMonitor:
         total_cpu_usage = sum(self.cpu_percents) / len(self.cpu_percents) if self.cpu_percents else 0
         return total_cpu_usage, self.peak_memory_mb
 
+###########################################################
+# tradução de results.txt para sql
+###########################################################
 
-# =============================================================================
-# Suas funções originais (sem modificações necessárias)
-# =============================================================================
 def dc_to_sql(dc_json_string: str, table_name: str) -> str:
 
     dc_grammar = r"""
@@ -167,44 +169,31 @@ def dc_to_sql(dc_json_string: str, table_name: str) -> str:
     except ValueError as e:
         print(e)
 
+###########################################################
+# funções para execução de queries
+###########################################################
 
-# função para rodar uma query em uma thread
-def run_query_in_thread(main_connection, dc_json, csv_path, i, results_list):
+def run_query_in_thread(main_connection, dc_json, csv_file, thread_n, results_list):
     """
-    Executa uma única query de DC em um thread, usando seu próprio cursor.
+    Executa uma única query de DC em uma thread
     """
-    try:
-        # 1. Cria um cursor a partir da conexão principal
-        cursor = main_connection.cursor()
+    cursor = main_connection.cursor()
+    
+    sql_query = dc_to_sql(dc_json, csv_file)
+    if sql_query:
         
-        # 2. Gera e executa a query usando o cursor
-        sql_query = dc_to_sql(dc_json, csv_path)
-        if sql_query:
-            
-            count_query = f"SELECT COUNT(*) FROM ({sql_query.replace(';', '')}) as violations_subquery;"
-            num_violations = cursor.execute(count_query).fetchone()[0]
+        count_query = f"SELECT COUNT(*) FROM ({sql_query.replace(';', '')}) as violations_subquery;"
+        num_violations = cursor.execute(count_query).fetchone()[0]
 
-            # violations = cursor.execute(sql_query).df()
-            # num_violations = len(violations)
-            
-            # 3. Armazena o resultado em uma lista compartilhada
-            results_list.append((i, num_violations))
-            print(f"Thread for DC #{i+1}: Found {num_violations} violations.")
+        # violations = cursor.execute(sql_query).df()
+        # num_violations = len(violations)
+        
+        results_list.append((thread_n, num_violations))
+        print(f"DC #{i+1}: {num_violations} violacoes")
 
-    except Exception as e:
-        results_list.append((i, -1))
-        print(f"Error in thread for DC #{i+1}: {e}")
-
-
-
-
-def run_single_benchmark(thread_count, json_objects, csv_file):
-    """
-    Executa a carga de trabalho, imprime as contagens de violações
-    e retorna apenas as métricas de benchmark.
-    """
+def run_sequential(thread_count, dc_json, csv_file, results_list):
     pid = os.getpid()
-    print(f"Iniciando teste com {thread_count} thread(s) (PID: {pid})...")
+    print(f"Iniciando teste com {thread_count} thread(s)")
     
     con = duckdb.connect(config={'threads': thread_count})
     monitor = ResourceMonitor(pid)
@@ -212,14 +201,14 @@ def run_single_benchmark(thread_count, json_objects, csv_file):
     monitor.start()
     start_time = time.perf_counter()
     
-    for i, dc_json in enumerate(json_objects):
+    for i, dc_json in enumerate(dc_json):
         sql_query = dc_to_sql(dc_json, csv_file)
+
         if sql_query:
             # Executa a query e obtém o número de violações
 
             count_query = f"SELECT COUNT(*) FROM ({sql_query.replace(';', '')}) as violations_subquery;"
             num_violations = cursor.execute(count_query).fetchone()[0]
-
 
             # num_violations = len(con.execute(sql_query).df())
             # Imprime a contagem imediatamente
@@ -238,34 +227,33 @@ def run_single_benchmark(thread_count, json_objects, csv_file):
     print(f"Teste com {thread_count} thread(s) concluído.")
     return result
 
+###################################################
+# Main
+###################################################
 
-# =============================================================================
-# Novo Bloco Principal
-# =============================================================================
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description="Run Denial Constraints on a CSV using DuckDB")
     parser.add_argument("--csv-file", type=str, default="flights.csv", help="Caminho para o CSV com os dados")
     parser.add_argument("--results-file", type=str, default="results.txt", help="Caminho para o JSON com DCs")
-    parser.add_argument("--parallel", action="store_true", help="Executa as queries em paralelo (paralelismo INTER-query)")
+    parser.add_argument("--parallel", action="store_true", help="Executa as queries em paralelo")
     args = parser.parse_args()
 
+    # le o json de cada dc
     with open(args.results_file, 'r', encoding='utf-8') as f:
         json_objects = [line.strip() for line in f if line.strip()]
 
     process = psutil.Process(os.getpid())
-    num_logical_cores = os.cpu_count()
+    # num_logical_cores = os.cpu_count()
 
     if args.parallel:
-        print("Executando em modo THREADING (INTER-QUERY com cursores)...")
+        print("Executando em paralelo")
 
         pid = os.getpid()
         monitor = ResourceMonitor(pid)
 
-        # 1. Crie UMA ÚNICA conexão principal
-        # main_con = duckdb.connect(config={'memory_limit': '3GB'})
         main_con = duckdb.connect()
+        # main_con = duckdb.connect(config={'memory_limit': '3GB'})
         # main_con = duckdb.connect(config={'threads': 4})
-
         
         threads = []
         results = [] # Lista para coletar os resultados dos threads
@@ -273,22 +261,21 @@ if __name__ == '__main__':
         monitor.start()
         start_time = time.perf_counter()
 
-        # 2. Crie e inicie um thread para cada query de DC
+        # uma thread para cada query de DC
         for i, dc_json in enumerate(json_objects):
             thread = Thread(target=run_query_in_thread, 
                             args=(main_con, dc_json, args.csv_file, i, results))
             threads.append(thread)
             thread.start()
 
-        # 3. Espere todos os threads terminarem
         for thread in threads:
             thread.join()
 
         end_time = time.perf_counter()
         total_cpu, peak_mem = monitor.stop()
 
-        # 4. Feche a conexão principal
         main_con.close()
+
 
         # Processa os resultados
         print("\n--- Resultados (Threading) ---")
@@ -304,22 +291,20 @@ if __name__ == '__main__':
         print(f"Uso Médio de CPU (%): {total_cpu:.2f}")
         print("-" * 40)
 
-    else:
-        # O modo sequencial agora é mais simples
-        print("Executando em modo SEQUENCIAL (testando paralelismo INTRA-QUERY)...")
-        
-        thread_counts_to_test = [8]
-        final_results = []
 
-        for thread_count in thread_counts_to_test:
-            # A função agora imprime as contagens internamente
-            result = run_single_benchmark(thread_count, json_objects, args.csv_file)
-            final_results.append(result)
-            print("-" * 75)
+    else:
+        print("Executando em modo sequencial")
+        
+        thread_count = 4
+        results = []
+
+        # A função agora imprime as contagens internamente
+        result = run_sequential(thread_count, json_objects, args.csv_file, results)
+        results.append(result)
 
         # A impressão final do benchmark funciona para ambos os modos
         print("\n--- Resultados Finais do Benchmark ---")
         print(f"{'Configuração Threads':<20} | {'Tempo (s)':<15} | {'Pico Memória (MB)':<20} | {'Uso Total CPU (%)':<20}")
         print("-" * 85)
-        for res in final_results:
+        for res in results:
             print(f"{res['threads']:<20} | {res['time_s']:<15.4f} | {res['peak_mem_mb']:<20.2f} | {res['total_cpu_pct']:<20.2f}")
