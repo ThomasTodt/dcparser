@@ -121,7 +121,8 @@ def dc_to_sql(dc_json_string: str, table_name: str) -> str:
             t_var1 = "t1" if idx1 == 0 else "t2"
             t_var2 = "t1" if idx2 == 0 else "t2"
 
-            return f"{t_var1}.{col1} {sql_op} {t_var2}.{col2}"
+            # return f"{t_var1}.{col1} {sql_op} {t_var2}.{col2}"
+            return f'{t_var1}."{col1}" {sql_op} {t_var2}."{col2}"'
 
         def visit_predicate_list(self, node, visited_children):
             first_pred = visited_children[0]
